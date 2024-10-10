@@ -43,10 +43,12 @@ private:
     void showError(const QString &message);
     void showWarning(const QString &message);
     void showInfo(const QString &message);
+    bool performSerialization();
 
     struct MessageField {
         QString type;
         QString name;
+        int number;
     };
 
     QPushButton *protoFileButton;

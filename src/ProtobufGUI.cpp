@@ -179,33 +179,55 @@ void ProtobufGUI::updateFieldInputs() {
 
 void ProtobufGUI::parseGeneratedCode() {
     QString code = generatedCodeEdit->toPlainText();
-
-    QRegularExpression fieldRegex("(\\w+)\\s+(\\w+)\\s*=\\s*(\\d+);");
-    QRegularExpressionMatchIterator i = fieldRegex.globalMatch(code);
+    QStringList lines = code.split('\n');
 
     messageFields.clear();
-    while (i.hasNext()) {
-        QRegularExpressionMatch match = i.next();
-        MessageField field;
-        field.type = match.captured(1);
-        field.name = match.captured(2);
+    bool inAccessorsSection = false;
+    QRegularExpression fieldRegex("^\\s*//\\s*(\\w+)\\s+(\\w+)\\s*=\\s*(\\d+);");
 
-        if (field.type == "int32" || field.type == "int64") {
-            field.type = "integer";
-        } else if (field.type == "float" || field.type == "double") {
-            field.type = "float";
-        } else if (field.type == "bool") {
-            field.type = "boolean";
+    for (const QString& line : lines) {
+        if (line.contains("// accessors -------------------------------------------------------")) {
+            inAccessorsSection = true;
+            continue;
         }
 
-        messageFields.append(field);
+        if (inAccessorsSection) {
+            if (line.contains("// @@protoc_insertion_point(class_scope:")) {
+                break;  // End of accessors section
+            }
+
+            QRegularExpressionMatch match = fieldRegex.match(line);
+            if (match.hasMatch()) {
+                MessageField field;
+                field.type = match.captured(1);
+                field.name = match.captured(2);
+                field.number = match.captured(3).toInt();
+
+                if (field.type == "int32" || field.type == "int64") {
+                    field.type = "integer";
+                } else if (field.type == "float" || field.type == "double") {
+                    field.type = "float";
+                } else if (field.type == "bool") {
+                    field.type = "boolean";
+                }
+
+                messageFields.append(field);
+            }
+        }
     }
 
     if (messageFields.isEmpty()) {
         showError("No fields found in the generated code. Make sure the .proto file is correctly formatted.");
+        qDebug() << "Generated code:";
+        qDebug() << code;
     } else {
         updateFieldInputs();
         showInfo(QString("%1 fields found in the generated code.").arg(messageFields.size()));
+
+        qDebug() << "Fields found:";
+        for (const auto& field : messageFields) {
+            qDebug() << "Name:" << field.name << "Type:" << field.type << "Number:" << field.number;
+        }
     }
 }
 
@@ -296,17 +318,39 @@ bool ProtobufGUI::readGeneratedCode() {
     }
 }
 
+// WILL FIX THIS LATER, PROBABLY...
 bool ProtobufGUI::compileGeneratedCode() {
     QProcess process;
     QString workingDir = outputFolderPath.isEmpty() ? tempDir->path() : outputFolderPath;
     process.setWorkingDirectory(workingDir);
-    process.start("cl", QStringList() << "/LD" << "/Fe:temp.dll" << "temp.pb.cc" << "/I." << "/Ipath_to_protobuf_include" << "libprotobuf.lib" << "/link" << "/LIBPATH:path_to_protobuf_lib");
-    process.waitForFinished();
+
+    QString protobufPath = "C:\\something should be here\\protobuf-28.2";
+    QString includePath = protobufPath + "\\include";
+    QString libPath = protobufPath + "\\lib";
+
+    QStringList args;
+    args << "/LD"
+         << "/Fe:temp.dll"
+         << "temp.pb.cc"
+         << "/I."
+         << "/I" + includePath
+         << "libprotobuf.lib"
+         << "/link"
+         << "/LIBPATH:" + libPath;
+
+    process.start("cl", args);
+    process.waitForFinished(-1);
+
+    QString stdOutput = process.readAllStandardOutput();
+    QString stdError = process.readAllStandardError();
 
     if (process.exitCode() != 0) {
-        showError("Failed to compile generated code: " + process.readAllStandardError());
+        showError("Failed to compile generated code. Exit code: " + QString::number(process.exitCode()) +
+                  "\nStandard output: " + stdOutput +
+                  "\nStandard error: " + stdError);
         return false;
     }
+
     return true;
 }
 
@@ -320,37 +364,73 @@ bool ProtobufGUI::loadCompiledLibrary() {
     return true;
 }
 
+//#include outputFolderPath + "\\temp.pb.h"
+
+
 bool ProtobufGUI::performSerialization(const QMap<QString, QString> &fieldValues) {
-    typedef void* (__stdcall *NewMessageFunc)();
-    typedef bool (__stdcall *SetFieldFunc)(void*, const char*, const char*);
-    typedef bool (__stdcall *SerializeFunc)(const void*, std::string*);
+    //typedef void* (__stdcall *NewMessageFunc)();
+    //typedef bool (__stdcall *SetFieldFunc)(void*, const char*, const char*);
+    //typedef bool (__stdcall *SerializeFunc)(const void*, std::string*);
 
-    NewMessageFunc newMessage = (NewMessageFunc)GetProcAddress(static_cast<HMODULE>(libHandle), "NewMessage");
-    SetFieldFunc setField = (SetFieldFunc)GetProcAddress(static_cast<HMODULE>(libHandle), "SetMessageField");
-    SerializeFunc serialize = (SerializeFunc)GetProcAddress(static_cast<HMODULE>(libHandle), "SerializeMessage");
+    //NewMessageFunc newMessage = (NewMessageFunc)GetProcAddress(static_cast<HMODULE>(libHandle), "NewMessage");
+    //SetFieldFunc setField = (SetFieldFunc)GetProcAddress(static_cast<HMODULE>(libHandle), "SetMessageField");
+    //SerializeFunc serialize = (SerializeFunc)GetProcAddress(static_cast<HMODULE>(libHandle), "SerializeMessage");
 
-    if (!newMessage || !setField || !serialize) {
-        showError("Failed to find required functions in the compiled library.");
-        return false;
-    }
+    //if (!newMessage || !setField || !serialize) {
+    //    showError("Failed to find required functions in the compiled library.");
+    //    return false;
+    //}
 
-    void* msg = newMessage();
+    //void* msg = newMessage();
 
-    for (auto it = fieldValues.constBegin(); it != fieldValues.constEnd(); ++it) {
-        if (!setField(msg, it.key().toStdString().c_str(), it.value().toStdString().c_str())) {
-            showError("Failed to set field: " + it.key());
-            return false;
-        }
-    }
+    //for (auto it = fieldValues.constBegin(); it != fieldValues.constEnd(); ++it) {
+    //    if (!setField(msg, it.key().toStdString().c_str(), it.value().toStdString().c_str())) {
+    //        showError("Failed to set field: " + it.key());
+    //        return false;
+    //    }
+    //}
 
-    std::string serialized;
-    if (serialize(msg, &serialized)) {
-        serializedOutputEdit->setPlainText(QString::fromStdString(serialized.empty() ? "Empty serialized data" : serialized));
-        return true;
-    } else {
-        serializedOutputEdit->setPlainText("Serialization failed");
-        return false;
-    }
+    //std::string serialized;
+    //if (serialize(msg, &serialized)) {
+    //    serializedOutputEdit->setPlainText(QString::fromStdString(serialized.empty() ? "Empty serialized data" : serialized));
+    //    return true;
+    //} else {
+    //    serializedOutputEdit->setPlainText("Serialization failed");
+    //    return false;
+
+
+    // HARDCODED ATTEMPT //
+
+    //bool ProtobufGUI::performSerialization(const QMap<QString, QString> &fieldValues) {
+        // Create a Person message
+    //    example::Person person;
+
+        // Set the fields based on user input
+    //    for (auto it = fieldValues.constBegin(); it != fieldValues.constEnd(); ++it) {
+    //        const QString& fieldName = it.key();
+    //        const QString& fieldValue = it.value();
+
+    //        if (fieldName == "name") {
+    //            person.set_name(fieldValue.toStdString());
+    //        } else if (fieldName == "age") {
+    //            person.set_age(fieldValue.toInt());
+    //        } else if (fieldName == "email") {
+    //            person.set_email(fieldValue.toStdString());
+    //        }
+    //        // Add more fields as necessary
+    //    }
+
+    //    // Serialize the message
+    //    std::string serialized;
+    //    if (!person.SerializeToString(&serialized)) {
+    //        showError("Failed to serialize the message.");
+    //        return false;
+    //    }
+
+        // Display the serialized data
+    //    serializedOutputEdit->setPlainText(QString::fromStdString(serialized));
+          return true;
+    //}
 }
 
 void ProtobufGUI::showError(const QString &message) {
