@@ -18,7 +18,7 @@
 ProtobufGUI::ProtobufGUI(QWidget *parent)
     : QMainWindow(parent), libHandle(nullptr)
 {
-    setWindowTitle("Protobuf Compiler and Serializer GUI");
+    setWindowTitle("Protobuf Compiler and Code Generator GUI");
     setupUI();
     connectSignalsAndSlots();
 }
@@ -43,7 +43,7 @@ void ProtobufGUI::setupUI() {
     protocLocationButton = new QPushButton("Select protoc location", this);
     outputFolderButton = new QPushButton("Select output folder", this);
     compileButton = new QPushButton("Compile Proto", this);
-    serializeButton = new QPushButton("Serialize Message", this);
+    serializeButton = new QPushButton("Generate Serializer Code", this);
     serializeButton->setEnabled(false);
 
     leftLayout->addWidget(protoFileButton);
@@ -66,6 +66,7 @@ void ProtobufGUI::setupUI() {
 
     serializedOutputEdit = new QPlainTextEdit(this);
     serializedOutputEdit->setReadOnly(true);
+    serializedOutputEdit->setPlaceholderText("Generated serializer.cpp content will appear here");
 
     QWidget *fieldInputsContainer = new QWidget(this);
     QVBoxLayout *fieldInputsLayout = new QVBoxLayout(fieldInputsContainer);
@@ -92,7 +93,7 @@ void ProtobufGUI::connectSignalsAndSlots() {
     connect(protocLocationButton, &QPushButton::clicked, this, &ProtobufGUI::selectProtocLocation);
     connect(outputFolderButton, &QPushButton::clicked, this, &ProtobufGUI::selectOutputFolder);
     connect(compileButton, &QPushButton::clicked, this, &ProtobufGUI::compileProto);
-    connect(serializeButton, &QPushButton::clicked, this, &ProtobufGUI::serializeMessage);
+    connect(serializeButton, &QPushButton::clicked, this, &ProtobufGUI::generateAndDisplaySerializerCode);
 }
 
 void ProtobufGUI::selectProtoFile() {
@@ -132,7 +133,7 @@ void ProtobufGUI::compileProto() {
 
     compileButton->setEnabled(false);
     serializeButton->setEnabled(true);
-    showInfo("Proto file compiled successfully. You can now serialize.");
+    showInfo("Proto file compiled successfully. You can now generate serializer code.");
 }
 
 void ProtobufGUI::updateFieldInputs() {
@@ -218,33 +219,71 @@ void ProtobufGUI::parseGeneratedCode() {
 
     if (messageFields.isEmpty()) {
         showError("No fields found in the generated code. Make sure the .proto file is correctly formatted.");
-        qDebug() << "Generated code:";
-        qDebug() << code;
     } else {
         updateFieldInputs();
         showInfo(QString("%1 fields found in the generated code.").arg(messageFields.size()));
-
-        qDebug() << "Fields found:";
-        for (const auto& field : messageFields) {
-            qDebug() << "Name:" << field.name << "Type:" << field.type << "Number:" << field.number;
-        }
     }
 }
 
-void ProtobufGUI::serializeMessage() {
-    if (!compileGeneratedCode()) return;
-    if (!loadCompiledLibrary()) return;
+void ProtobufGUI::generateAndDisplaySerializerCode() {
+    generateSerializationCode();
 
-    QMap<QString, QString> fieldValues;
+    QString serializerPath = QDir(outputFolderPath).filePath("serializer.cpp");
+    QFile serializerFile(serializerPath);
+    if (serializerFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        serializedOutputEdit->setPlainText(serializerFile.readAll());
+        serializerFile.close();
+        showInfo("Serializer code generated and displayed successfully.");
+    } else {
+        showError("Failed to read generated serializer.cpp file.");
+    }
+}
+
+void ProtobufGUI::generateSerializationCode() {
+    QString cppPath = QDir(outputFolderPath).filePath("serializer.cpp");
+    QFile cppFile(cppPath);
+    if (!cppFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        showError("Failed to create serializer.cpp file.");
+        return;
+    }
+
+    QTextStream out(&cppFile);
+
+    out << "#include \"temp.pb.h\"\n";
+    out << "#include <fstream>\n";
+    out << "#include <iostream>\n\n";
+
+    out << "int main() {\n";
+    out << "    GOOGLE_PROTOBUF_VERIFY_VERSION;\n\n";
+    out << "    example::Person message;\n\n";
+
     for (const auto &field : messageFields) {
-        if (fieldInputs.contains(field.name)) {
-            fieldValues[field.name] = fieldInputs[field.name]->text();
+        QString value = fieldInputs[field.name]->text();
+        if (field.type == "string") {
+            out << QString("    message.set_%1(\"%2\");\n").arg(field.name, value);
+        } else if (field.type == "integer") {
+            out << QString("    message.set_%1(%2);\n").arg(field.name, value);
+        } else if (field.type == "float") {
+            out << QString("    message.set_%1(%2f);\n").arg(field.name, value);
+        } else if (field.type == "boolean") {
+            out << QString("    message.set_%1(%2);\n").arg(field.name, value.toLower());
         }
     }
 
-    if (!performSerialization(fieldValues)) return;
+    out << "\n    std::ofstream output(\"message.bin\", std::ios::binary);\n";
+    out << "    if (!message.SerializeToOstream(&output)) {\n";
+    out << "        std::cerr << \"Failed to write message.\" << std::endl;\n";
+    out << "        return -1;\n";
+    out << "    }\n\n";
 
-    showInfo("Message serialized successfully.");
+    out << "    std::cout << \"Message serialized successfully.\" << std::endl;\n";
+    out << "    google::protobuf::ShutdownProtobufLibrary();\n";
+    out << "    return 0;\n";
+    out << "}\n";
+
+    cppFile.close();
+
+    showInfo("Serialization code generated successfully.");
 }
 
 void ProtobufGUI::loadProtoFile(const QString &filePath) {
@@ -316,121 +355,6 @@ bool ProtobufGUI::readGeneratedCode() {
         showError("Failed to read generated code files.");
         return false;
     }
-}
-
-// WILL FIX THIS LATER, PROBABLY...
-bool ProtobufGUI::compileGeneratedCode() {
-    QProcess process;
-    QString workingDir = outputFolderPath.isEmpty() ? tempDir->path() : outputFolderPath;
-    process.setWorkingDirectory(workingDir);
-
-    QString protobufPath = "C:\\something should be here\\protobuf-28.2";
-    QString includePath = protobufPath + "\\include";
-    QString libPath = protobufPath + "\\lib";
-
-    QStringList args;
-    args << "/LD"
-         << "/Fe:temp.dll"
-         << "temp.pb.cc"
-         << "/I."
-         << "/I" + includePath
-         << "libprotobuf.lib"
-         << "/link"
-         << "/LIBPATH:" + libPath;
-
-    process.start("cl", args);
-    process.waitForFinished(-1);
-
-    QString stdOutput = process.readAllStandardOutput();
-    QString stdError = process.readAllStandardError();
-
-    if (process.exitCode() != 0) {
-        showError("Failed to compile generated code. Exit code: " + QString::number(process.exitCode()) +
-                  "\nStandard output: " + stdOutput +
-                  "\nStandard error: " + stdError);
-        return false;
-    }
-
-    return true;
-}
-
-bool ProtobufGUI::loadCompiledLibrary() {
-    QString workingDir = outputFolderPath.isEmpty() ? tempDir->path() : outputFolderPath;
-    libHandle = LoadLibrary(QDir(workingDir).filePath("temp.dll").toStdWString().c_str());
-    if (!libHandle) {
-        showError("Failed to load compiled library: " + QString::number(GetLastError()));
-        return false;
-    }
-    return true;
-}
-
-//#include outputFolderPath + "\\temp.pb.h"
-
-
-bool ProtobufGUI::performSerialization(const QMap<QString, QString> &fieldValues) {
-    //typedef void* (__stdcall *NewMessageFunc)();
-    //typedef bool (__stdcall *SetFieldFunc)(void*, const char*, const char*);
-    //typedef bool (__stdcall *SerializeFunc)(const void*, std::string*);
-
-    //NewMessageFunc newMessage = (NewMessageFunc)GetProcAddress(static_cast<HMODULE>(libHandle), "NewMessage");
-    //SetFieldFunc setField = (SetFieldFunc)GetProcAddress(static_cast<HMODULE>(libHandle), "SetMessageField");
-    //SerializeFunc serialize = (SerializeFunc)GetProcAddress(static_cast<HMODULE>(libHandle), "SerializeMessage");
-
-    //if (!newMessage || !setField || !serialize) {
-    //    showError("Failed to find required functions in the compiled library.");
-    //    return false;
-    //}
-
-    //void* msg = newMessage();
-
-    //for (auto it = fieldValues.constBegin(); it != fieldValues.constEnd(); ++it) {
-    //    if (!setField(msg, it.key().toStdString().c_str(), it.value().toStdString().c_str())) {
-    //        showError("Failed to set field: " + it.key());
-    //        return false;
-    //    }
-    //}
-
-    //std::string serialized;
-    //if (serialize(msg, &serialized)) {
-    //    serializedOutputEdit->setPlainText(QString::fromStdString(serialized.empty() ? "Empty serialized data" : serialized));
-    //    return true;
-    //} else {
-    //    serializedOutputEdit->setPlainText("Serialization failed");
-    //    return false;
-
-
-    // HARDCODED ATTEMPT //
-
-    //bool ProtobufGUI::performSerialization(const QMap<QString, QString> &fieldValues) {
-        // Create a Person message
-    //    example::Person person;
-
-        // Set the fields based on user input
-    //    for (auto it = fieldValues.constBegin(); it != fieldValues.constEnd(); ++it) {
-    //        const QString& fieldName = it.key();
-    //        const QString& fieldValue = it.value();
-
-    //        if (fieldName == "name") {
-    //            person.set_name(fieldValue.toStdString());
-    //        } else if (fieldName == "age") {
-    //            person.set_age(fieldValue.toInt());
-    //        } else if (fieldName == "email") {
-    //            person.set_email(fieldValue.toStdString());
-    //        }
-    //        // Add more fields as necessary
-    //    }
-
-    //    // Serialize the message
-    //    std::string serialized;
-    //    if (!person.SerializeToString(&serialized)) {
-    //        showError("Failed to serialize the message.");
-    //        return false;
-    //    }
-
-        // Display the serialized data
-    //    serializedOutputEdit->setPlainText(QString::fromStdString(serialized));
-          return true;
-    //}
 }
 
 void ProtobufGUI::showError(const QString &message) {

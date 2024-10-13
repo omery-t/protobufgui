@@ -27,7 +27,6 @@ private slots:
     void compileProto();
     void updateFieldInputs();
     void parseGeneratedCode();
-    void serializeMessage();
 
 private:
     void setupUI();
@@ -39,6 +38,9 @@ private:
     bool readGeneratedCode();
     bool compileGeneratedCode();
     bool loadCompiledLibrary();
+    void generateSerializationCode();
+    bool runSerializationExecutable();
+    void generateAndDisplaySerializerCode();
     bool performSerialization(const QMap<QString, QString> &fieldValues);
     void showError(const QString &message);
     void showWarning(const QString &message);
